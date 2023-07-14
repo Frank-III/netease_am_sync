@@ -2,34 +2,41 @@ use crate::errors;
 use chrono::Local;
 use reqwest::{Request, Response};
 use serde_json::Value;
-use std::error;
 use std::sync::Arc;
+use std::{error, vec};
 use std::{thread, time::Duration};
 use tokio::sync::RwLock;
 // TODO: watch the great build video about how login qr check could update the cookies
 #[derive(Debug)]
-struct NeteaseApi {
+pub struct NeteaseApi {
     client: reqwest::Client,
     base_uri: String,
     //headers: reqwest::header::HeaderMap,
     cookies: Option<String>, //seems to work
-    uid: Option<i64>,
+    uid: Option<String>,
 }
 
 impl NeteaseApi {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             client: reqwest::Client::new(),
             base_uri: std::env::var("NETEASE_ENDPOINT")
                 .unwrap_or_else(|_| "http://localhost:4000".to_string()),
             cookies: std::env::var("NETEASE_COOKIES").ok(),
-            uid: None,
+            uid: std::env::var("NETEASE_UID").ok(),
             //headers: reqwest::headers::HeaderMap::new(),
         }
     }
-    async fn gen_qr_code(&self) -> Result<Response, reqwest::Error> {
+    pub fn set_cookies(&mut self, cookies: &str) {
+        self.cookies = Some(cookies.to_string());
+    }
+    pub fn has_cookie(&self, cookies: &str) -> bool {
+        self.cookies.is_some()
+    }
+
+    pub async fn gen_qr_code(&self) -> Result<Response, reqwest::Error> {
         self.client
-            .get(format!("{}login/qr/key", self.base_uri))
+            .get(format!("{}/login/qr/key", self.base_uri))
             .query(&vec![(
                 "timestamp",
                 Local::now().timestamp_millis().to_string(),
@@ -38,13 +45,10 @@ impl NeteaseApi {
             .await
     }
 
-    async fn login_qr_check(&self, key: &str) -> Result<String, errors::NeteaseCallError> {
-        let timestamp = Local::now().timestamp_millis();
+    pub async fn login_qr_check(&mut self, key: &str) -> Result<(), errors::NeteaseCallError> {
         let Ok(response) = self.client
-        .get(format!(
-            "{}/login/qr/check?timestamp={}&key={}",
-            self.base_uri, timestamp, key
-        ))
+        .get(format!("{}/login/qr/check",self.base_uri))
+        .query(&[("timestamp", Local::now().timestamp_millis().to_string().as_str()), ("key", key)])
         .send()
         .await else {
             return Err(errors::NeteaseCallError::ClientFailError(502));
@@ -63,17 +67,9 @@ impl NeteaseApi {
             )),
             Some(803) => {
                 println!("Qrcode succeed!");
-                let cookies = serialize.get("cookie").unwrap().as_str();
-                // let cookie_map = get_cookies(cookies.unwrap().to_string());
-                // println!("the cookie is {:#?}", cookies);
-                // println!("the cookie_map is {:#?}", cookie_map);
-                Ok(cookies.unwrap().to_string())
+                self.cookies = serialize.get("cookie").map(|s| s.to_string());
+                Ok(())
             }
-            // Some(200) => {
-            //     println!("Qrcode succeed!");
-            //     println!("the cookie is {:#?}", serialize.get("cookie").unwrap());
-            //     return true;
-            // }
             Some(_) => Err(errors::NeteaseCallError::ParseError(
                 "unrecognized code".to_string(),
             )),
@@ -83,7 +79,72 @@ impl NeteaseApi {
         }
     }
 
-    async fn user_account(&self) -> Result<Response, reqwest::Error> {
-        todo!()
+    pub async fn user_account(&mut self) -> errors::NetResult<()> {
+        if self.cookies.is_none() {
+            return Err(errors::NeteaseCallError::NoCookieError);
+        };
+        match self
+            .client
+            .get(format!("{}/login/status", &self.base_uri))
+            .query(&vec![
+                (
+                    "timestamp",
+                    Local::now().timestamp_millis().to_string().as_str(),
+                ),
+                ("cookie", self.cookies.as_ref().unwrap()),
+            ])
+            .send()
+            .await
+        {
+            Ok(data) => match data.json::<Value>().await {
+                Ok(serialized) => {
+                    println!("{serialized:#?}");
+                    match serialized.get("profile") {
+                        Some(profile) => {
+                            self.uid = profile.get("userId").map(|s| s.to_string());
+                            Ok(())
+                        }
+                        None => Err(errors::NeteaseCallError::ParseError(
+                            "Fail to get Uid".to_string(),
+                        )),
+                    }
+                }
+                Err(_) => Err(errors::NeteaseCallError::ParseError(
+                    "failed to parse user information".to_string(),
+                )),
+            },
+            Err(_) => Err(errors::NeteaseCallError::ClientFailError(1)),
+        }
+    }
+
+    pub async fn user_likelist(&self) -> errors::NetResult<Value> {
+        if self.cookies.is_none() || self.uid.is_none() {
+            return Err(errors::NeteaseCallError::NoCookieError);
+        };
+        match self
+            .client
+            .get(format!("{}/likelist", &self.base_uri))
+            .query(&vec![
+                (
+                    "timestamp",
+                    Local::now().timestamp_millis().to_string().as_str(),
+                ),
+                ("cookie", self.cookies.as_ref().unwrap()),
+                ("uid", self.uid.as_ref().unwrap()),
+            ])
+            .send()
+            .await
+        {
+            Ok(data) => match data.json::<Value>().await {
+                Ok(v) => Ok(v),
+                Err(_) => Err(errors::NeteaseCallError::ParseError(
+                    "Failed to parse likelist".to_string(),
+                )),
+            },
+            Err(e) => {
+                eprintln!("{e:#?}");
+                Err(errors::NeteaseCallError::ClientFailError(1))
+            }
+        }
     }
 }
