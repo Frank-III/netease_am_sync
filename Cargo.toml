@@ -13,3 +13,4 @@ serde_json = "1.0.100"
 thiserror = "1.0.43"
 tokio = { version = "1.29.1", features = ["full"] }
 rqcode = { git = "https://github.com/jewlexx/qrcode-rust.git" }
+dotenvy = "0.15.7"

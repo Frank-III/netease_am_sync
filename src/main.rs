@@ -1,23 +1,44 @@
 use chrono::Local;
-use reqwest::{header, Response};
+use dotenvy::dotenv;
+use reqwest::header::HeaderMap;
+use reqwest::{header, IntoUrl, Response};
 use rqcode::render::unicode;
 use rqcode::QrCode;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::error::Error;
 use std::{thread, time::Duration};
-mod errors;
-
+pub mod errors;
+pub mod neteaseapi;
 #[tokio::main]
 async fn main() {
-    let mut params = HashMap::new();
-    // let timestamp = Local::now().timestamp_millis().to_string();
-    // println!("{:?}", timestamp);
-    // params.insert("timestamp", timestamp);
+    let mut headers = reqwest::header::HeaderMap::new();
+    dotenv().ok();
+    let endpoint =
+        std::env::var("NETEASE_ENDPOINT").unwrap_or_else(|_| "http://localhost:4000".to_string());
+
+    // headers.insert(
+    //     reqwest::header::CONTENT_TYPE,
+    //     "application/x-www-form-urlencoded".parse().unwrap(),
+    // );
+    // headers.insert(reqwest::header::ACCEPT, "*/*".parse().unwrap());
+    // headers.insert(
+    //     reqwest::header::REFERER,
+    //     "https://music.163.com".parse().unwrap(),
+    // );
+    // headers.insert(
+    //     reqwest::header::USER_AGENT,
+    //     "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:65.0) Gecko/20100101 Firefox/65.0"
+    //         .parse()
+    //         .unwrap(),
+    // );
     let http_client = reqwest::Client::new();
+    let t = Local::now().timestamp_millis().to_string();
+    println!("{endpoint}, {t}");
     let Ok(response) = http_client
-        .get("http://localhost:4000/login/qr/key")
-        .header("timestamp", Local::now().timestamp_millis().to_string())
+        .get(format!("{}/login/qr/key", endpoint))
+        .headers(headers.clone())
+        .query(&vec![("timestamp", Local::now().timestamp_millis().to_string())])
         .send()
         .await else {
             eprint!("fail to connect to the server");
@@ -53,12 +74,17 @@ async fn main() {
         .build();
     println!("{}", image);
     // enter a loop
+    let mut cookie: Option<String> = None;
     loop {
         let cookie_map = login_qr_check(&http_client, unikey.unwrap()).await;
         match cookie_map {
             Ok(cookies) => {
                 println!("success");
-                params.insert(header::COOKIE.as_ref(), cookies);
+
+                //this cookies works
+                // headers.insert(header::COOKIE, "_ga=GA1.1.513827141.1688404224; NMTID=00O523APh9QRBswzEzwtrFhEkA1ShAAAAGJHTEHvg; _ga_KMJJCFZDKF=GS1.1.1689192763.4.1.1689194255.0.0.0; __csrf=9c6e41b48e910c50b0372e10fe87d060; MUSIC_U=009CE7AE44ABA22ED3B2899C974A1A4AFC43211CC6EC4D0774AF0414A4D0A687EE81B666C83E23D41EDC57B6A197159B0764D4DB43C539115520DA6437975AF4AE2F70084F7AF66B2DB7D61EFAA60DF61E058E0CB40B864FC3093897F7D276A8D8D0876419AD937AA835487D5E0303ADDB053FE2DC47E8BB5C81A17566D9A43854E449A95A1B56E806636C8E6CA4BE631659A23CE80DE0EB32C031A38417A2A847EAC96BCF315E946A007146BFC87B22616E13C155F1BA9868E7514E5948745C58D6B3FE930B0E3DC6FEEDF87DA3FA9F85470763A38A20E95BCB6C684D3BB076F0023FE68EE8573075933C3965AC67477546B5000D08C6FB80078DAE42E13DE1576F80E4539AFD6D29AC8CC96A52C4E27D504C08203226ECA68E3A3C0C61B7EBF9E973364029F872F82087765F453CFB1C88BA4231589C392C44A9C8C2B4F2D1C8".parse().unwrap());
+                cookie = Some(cookies);
+                // headers.insert(header::COOKIE, cookies.parse().unwrap());
                 break;
             }
             Err(err) => {
@@ -67,7 +93,13 @@ async fn main() {
             }
         }
     }
-    match get_endpoint(&http_client, "http://localhost:4000/user/account", &params).await {
+    match get_endpoint(
+        &http_client,
+        format!("{}/login/status", &endpoint),
+        cookie.unwrap().as_str(),
+    )
+    .await
+    {
         Ok(data) => match data.json::<Value>().await {
             Ok(serialized) => {
                 println!("{serialized:#?}");
@@ -80,15 +112,17 @@ async fn main() {
     }
 }
 
-async fn get_endpoint(
+async fn get_endpoint<U: IntoUrl>(
     client: &reqwest::Client,
-    endpoint: &str,
-    query: &HashMap<&str, String>,
+    endpoint: U,
+    cookies: &str,
 ) -> Result<reqwest::Response, reqwest::Error> {
     client
         .get(endpoint)
-        .query(query)
-        .header("timestamp", Local::now().timestamp_millis().to_string())
+        .query(&vec![
+            ("timestamp", Local::now().timestamp_millis().to_string()),
+            ("cookie", cookies.to_string()),
+        ])
         .send()
         .await
 }
@@ -101,7 +135,7 @@ async fn login_qr_check(
     let timestamp = Local::now().timestamp_millis();
     let Ok(response) = client
         .get(format!(
-            "http://localhost:4000/login/qr/check?timestamp={}&key={}",
+            "http://localhost:27232/api/login/qr/check?timestamp={}&key={}",
             timestamp, key
         ))
         .send()
@@ -123,10 +157,10 @@ async fn login_qr_check(
         Some(803) => {
             println!("Qrcode succeed!");
             let cookies = serialize.get("cookie").unwrap().as_str();
-            println!("the cookie is {:#?}", cookies);
-            let cookie_map = get_cookies(cookies.unwrap().to_string());
-            println!("the cookie_map is {:#?}", cookie_map);
-            Ok(cookie_map)
+            // let cookie_map = get_cookies(cookies.unwrap().to_string());
+            // println!("the cookie is {:#?}", cookies);
+            // println!("the cookie_map is {:#?}", cookie_map);
+            Ok(cookies.unwrap().to_string())
         }
         // Some(200) => {
         //     println!("Qrcode succeed!");
@@ -145,18 +179,27 @@ async fn login_qr_check(
 // TODO: do I need a hashmap or just string
 fn get_cookies(cookies: String) -> String {
     let mut cookie_vals: HashMap<String, String> = HashMap::new();
-
-    cookies.split(";;").for_each(|cookie| {
-        let mut cookie_ = cookie.split(';').next().unwrap().split('=');
-        cookie_vals.insert(
-            cookie_.next().unwrap().to_string(),
-            // format!("cookie-{}", cookie_.next().unwrap()),
-            cookie_.next().unwrap().to_string(),
-        );
-    });
+    cookie_vals.insert(
+        "_ga_KMJJCFZDKF".into(),
+        "GS1.1.1689200897.5.1.1689200923.0.0.0".into(),
+    );
+    cookie_vals.insert("_ga".into(), "GA1.1.513827141.1688404224".into());
+    cookies
+        .replace(" HTTPOnly", "")
+        .split(";;")
+        .for_each(|cookie| {
+            let mut cookie_ = cookie.split(';').next().unwrap().split('=');
+            if cookies.len() >= 2 {
+                cookie_vals.insert(
+                    cookie_.next().unwrap().to_string(),
+                    // format!("cookie-{}", cookie_.next().unwrap()),
+                    cookie_.next().unwrap().to_string(),
+                );
+            }
+        });
     cookie_vals
         .iter()
-        .map(|(k, v)| format!("{}={}", k, v).replace(";", "%3B"))
+        .map(|(k, v)| format!("{}={}", k, v))
         .collect::<Vec<_>>()
         .join(";")
 }

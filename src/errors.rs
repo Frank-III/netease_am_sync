@@ -8,7 +8,11 @@ pub enum NeteaseCallError {
     ParseError(String),
     #[error("QR Code Error: {0:?}")]
     QrCodeError(String),
+    #[error("You should login first")]
+    NoCookieError,
 }
+
+pub(crate) type NetResult<T> = Result<T, NeteaseCallError>;
 
 // #[derive(Debug)]
 // pub struct ParseError(&'static str);
