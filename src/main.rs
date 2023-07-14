@@ -30,51 +30,58 @@ async fn main() {
     // );
     //
     let mut client = neteaseapi::NeteaseApi::new();
-    let Ok(response) = client.gen_qr_code().await else {
+    if !client.has_cookie() {
+        let Ok(response) = client.gen_qr_code().await else {
         eprintln!("gen code failed");
         return;
     };
-    let Ok(serialize) = response.json::<Value>().await else {
+        let Ok(serialize) = response.json::<Value>().await else {
             eprint!("fail to deserialize the result");
             return;
     };
 
-    let unikey: Option<&str> = match serialize["code"].as_i64() {
-        Some(200) => serialize
-            .get("data")
-            .unwrap()
-            .get("unikey")
-            .unwrap()
-            .as_str(),
-        _ => {
-            eprint!("the reponse failed");
-            return;
-        }
-    };
-    println!("the unikey is {unikey:?}");
-    let code = QrCode::new(format!(
-        "https://music.163.com/login?codekey={}",
-        unikey.unwrap()
-    ))
-    .unwrap();
-    let image = code
-        .render::<unicode::Dense1x2>()
-        .dark_color(unicode::Dense1x2::Light)
-        .light_color(unicode::Dense1x2::Dark)
-        .build();
-    println!("{}", image);
-    loop {
-        match client.login_qr_check(unikey.as_ref().unwrap()).await {
-            Ok(_) => {
-                println!("success");
-                break;
+        let unikey: Option<&str> = match serialize["code"].as_i64() {
+            Some(200) => serialize
+                .get("data")
+                .unwrap()
+                .get("unikey")
+                .unwrap()
+                .as_str(),
+            _ => {
+                eprint!("the reponse failed");
+                return;
             }
-            Err(err) => {
-                eprintln!("{err:#?}");
-                thread::sleep(Duration::from_secs(3));
+        };
+        println!("the unikey is {unikey:?}");
+        let code = QrCode::new(format!(
+            "https://music.163.com/login?codekey={}",
+            unikey.unwrap()
+        ))
+        .unwrap();
+        let image = code
+            .render::<unicode::Dense1x2>()
+            .dark_color(unicode::Dense1x2::Light)
+            .light_color(unicode::Dense1x2::Dark)
+            .build();
+        println!("{}", image);
+        loop {
+            match client.login_qr_check(unikey.as_ref().unwrap()).await {
+                Ok(_) => {
+                    println!("success");
+                    break;
+                }
+                Err(err) => {
+                    eprintln!("{err:#?}");
+                    thread::sleep(Duration::from_secs(3));
+                }
             }
         }
     }
-    client.user_account().await;
+    let _ = client.user_account().await;
     println!("{client:#?}");
+    // works by now
+    match client.user_likelist().await {
+        Ok(data) => println!("{data:#?}"),
+        Err(e) => eprintln!("{e:#?}"),
+    };
 }
