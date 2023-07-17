@@ -16,6 +16,11 @@ pub struct NeteaseApi {
     uid: Option<String>,
 }
 
+impl Default for NeteaseApi {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl NeteaseApi {
     pub fn new() -> Self {
         Self {
@@ -122,7 +127,40 @@ impl NeteaseApi {
         }
     }
 
+    // get vector of ids but I want the details
     pub async fn user_likelist(&self) -> errors::NetResult<Value> {
+        if self.cookies.is_none() || self.uid.is_none() {
+            return Err(errors::NeteaseCallError::NoCookieError);
+        };
+        match self
+            .client
+            .get(format!("{}/likelist", &self.base_uri))
+            .query(&vec![
+                (
+                    "timestamp",
+                    Local::now().timestamp_millis().to_string().as_str(),
+                ),
+                ("cookie", self.cookies.as_ref().unwrap()),
+                ("uid", self.uid.as_ref().unwrap()),
+            ])
+            .send()
+            .await
+        {
+            Ok(data) => match data.json::<Value>().await {
+                Ok(v) => Ok(v),
+                Err(_) => Err(errors::NeteaseCallError::ParseError(
+                    "Failed to parse likelist".to_string(),
+                )),
+            },
+            Err(e) => {
+                eprintln!("{e:#?}");
+                Err(errors::NeteaseCallError::ClientFailError(1))
+            }
+        }
+    }
+
+    // get likelist id + likelist
+    pub async fn likelist_details(&self) -> errors::NetResult<Value> {
         if self.cookies.is_none() || self.uid.is_none() {
             return Err(errors::NeteaseCallError::NoCookieError);
         };
